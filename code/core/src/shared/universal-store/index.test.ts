@@ -784,13 +784,13 @@ You should reuse the existing instance instead of trying to create a new one.`);
       // Act - replace the state
       store.setState({ count: 1 });
 
-      // Assert - the state change should be emitted on the channel
+      // Assert - only the new state is sent on the channel; `previousState` is
+      // kept off the wire and derived by receivers (see below)
       expect(mockChannel.emit).toHaveBeenCalledWith('UNIVERSAL_STORE:env1:test', {
         event: {
           type: UniversalStore.InternalEventType.SET_STATE,
           payload: {
             state: { count: 1 },
-            previousState: { count: 0 },
           },
         },
         eventInfo: {
@@ -862,6 +862,43 @@ You should reuse the existing instance instead of trying to create a new one.`);
       );
     });
 
+    it('should derive previousState for its listeners when the channel omits it', async () => {
+      // Arrange - a leader and a follower in sync, with a listener on the follower
+      const leader = UniversalStore.create({
+        id: 'env1:test',
+        leader: true,
+        initialState: { count: 0 },
+      });
+      const follower = UniversalStore.create({
+        id: 'env2:test',
+        leader: false,
+      });
+      await vi.waitFor(
+        () => {
+          expect(follower.getState()).toEqual({ count: 0 });
+        },
+        { timeout: 200 }
+      );
+      const stateChangeListener = vi.fn();
+      follower.onStateChange(stateChangeListener);
+
+      // Act - update leader state (its channel event carries only `state`)
+      leader.setState({ count: 1 });
+
+      // Assert - the follower reconstructs `(state, previousState)` from the
+      // state it held, even though `previousState` never crossed the wire
+      await vi.waitFor(
+        () => {
+          expect(stateChangeListener).toHaveBeenCalledExactlyOnceWith(
+            { count: 1 },
+            { count: 0 },
+            expect.objectContaining({ actor: leader.actor })
+          );
+        },
+        { timeout: 200 }
+      );
+    });
+
     it('should re-emit the state change to the channel when a leader gets it', async () => {
       // Arrange - create a leader and a follower, and wait for them to be in sync
       const leader = UniversalStore.create({
@@ -892,7 +929,6 @@ You should reuse the existing instance instead of trying to create a new one.`);
               type: UniversalStore.InternalEventType.SET_STATE,
               payload: {
                 state: { count: 1 },
-                previousState: { count: 0 },
               },
             },
             eventInfo: {
@@ -908,7 +944,6 @@ You should reuse the existing instance instead of trying to create a new one.`);
               type: UniversalStore.InternalEventType.SET_STATE,
               payload: {
                 state: { count: 1 },
-                previousState: { count: 0 },
               },
             },
             eventInfo: {

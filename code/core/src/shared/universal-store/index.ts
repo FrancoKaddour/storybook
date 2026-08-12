@@ -424,15 +424,25 @@ export class UniversalStore<
     }
 
     this.state = newState;
-    const event = {
-      type: UniversalStore.InternalEventType.SET_STATE,
-      payload: {
-        state: newState,
-        previousState,
+    // `previousState` is always exactly the `state` of the previous SET_STATE,
+    // so every receiver can derive it from the state it is about to replace.
+    // We therefore keep it off the wire (see `emitToChannel` below) to avoid
+    // sending a second full copy of the state on every update, and only include
+    // it in the event emitted to local listeners, which observe both values.
+    this.emitToChannel(
+      {
+        type: UniversalStore.InternalEventType.SET_STATE,
+        payload: { state: newState },
       },
-    };
-    this.emitToChannel(event, { actor: this.actor });
-    this.emitToListeners(event, { actor: this.actor });
+      { actor: this.actor }
+    );
+    this.emitToListeners(
+      {
+        type: UniversalStore.InternalEventType.SET_STATE,
+        payload: { state: newState, previousState },
+      },
+      { actor: this.actor }
+    );
   }
 
   /**
@@ -663,11 +673,21 @@ export class UniversalStore<
       }
     }
 
-    switch (event.type) {
-      case UniversalStore.InternalEventType.SET_STATE:
-        this.debug('handleChannelEvents: Setting state', { event });
-        this.state = event.payload.state;
-        break;
+    if (event.type === UniversalStore.InternalEventType.SET_STATE) {
+      this.debug('handleChannelEvents: Setting state', { event });
+      // The wire omits `previousState` to avoid a second full copy of the state
+      // per event; derive it from the state we are about to replace so local
+      // listeners still receive `(state, previousState)`.
+      const previousState = this.state;
+      this.state = event.payload.state;
+      this.emitToListeners(
+        {
+          ...event,
+          payload: { state: event.payload.state, previousState },
+        },
+        { actor: eventInfo.actor }
+      );
+      return;
     }
 
     this.emitToListeners(event, { actor: eventInfo.actor });
